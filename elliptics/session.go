@@ -568,6 +568,178 @@ func (s *Session) WriteKey(key *Key, input io.Reader, offset, total_size uint64)
 	return responseCh
 }
 
+// TODO need check current real total_size (in elliptic) with total_size arg
+func (s *Session) WritePartial(key_str string, input io.Reader, offset, total_size uint64) <-chan Lookuper {
+
+	responseCh := make(chan Lookuper, defaultVOLUME)
+
+	lookupError := func (err error) <-chan Lookuper  {
+		responseCh <- &lookupResult{err: err}
+		close(responseCh)
+		return responseCh
+	}
+
+	//fmt.Printf("WritePartial: %s\n", key_str)
+
+	key, err := NewKey(key_str)
+	if err != nil {
+		return lookupError(err)
+	}
+
+	defer key.Free()
+
+
+	/*
+	if offset == 0 && total_size == 0 {
+		return lookupError(
+			&DnetError{
+				Code:    -22,		// -EINVAL
+				Flags:   0,
+				Message: "Invalid zero-length total size on first (prepare) data plain chunk",
+			},
+		)
+	}
+
+	if offset > 0 {
+		keyData := <-s.Lookup(key)
+
+		if err := keyData.Error(); err != nil {
+
+			dnet_error := DnetErrorFromError(err)
+
+			if dnet_error == nil {
+				dnet_error = &DnetError{
+					Code: -22,		// -EINVAL
+					Flags: keyData.Cmd().Flags,
+					Message: err.Error(),
+				}
+			}
+
+			return lookupError(dnet_error)
+		}
+
+		remote_total_size := keyData.Info().Size
+
+		if (total_size != 0) && (total_size != remote_total_size) {
+			return lookupError(
+				&DnetError{
+					Code:    -22,		// -EINVAL
+					Flags:   0,
+					Message: "Irrelevant total size",
+				},
+			)
+		}
+
+		// if total_size == 0 -> total_size = remote_total_size
+		total_size = remote_total_size
+	}
+	*/
+
+	if total_size == 0 {
+		return lookupError(
+			&DnetError{
+				Code:    -22,		// -EINVAL
+				Flags:   0,
+				Message: "Invalid zero-length total size",
+			},
+		)
+	}
+
+	if offset > total_size {
+		return lookupError(
+			&DnetError{
+				Code:    -22,		// -EINVAL
+				Flags:   0,
+				Message: "Invalid offset greater than total size",
+			},
+		)
+	}
+
+	buffer, err := ioutil.ReadAll(input)
+	if err != nil {
+		return lookupError(err)
+	}
+
+	size := uint64(len(buffer))
+	// end = offset + size - 1
+	cur_total_size := offset + size
+
+	if cur_total_size > total_size  {
+		buffer = nil
+		return lookupError(
+			&DnetError{
+				Code:    -27,		// -EFBIG
+				Flags:   0,
+				Message: "Buffer out of bound of total size",
+			},
+		)
+	}
+
+	onResultContext := NextContext()
+	onFinishContext := NextContext()
+
+	doCloseFree := func () {
+
+		close(responseCh)
+
+		Pool.Delete(onResultContext)
+		Pool.Delete(onFinishContext)
+	}
+
+
+	// https://github.com/noxiouz/elliptics-go/elliptics/writer.go#L128
+	onResult := func (lookup *lookupResult) {
+		responseCh <- lookup
+	}
+
+	onFinish := func (err error) {
+
+		if err != nil {
+			responseCh <- &lookupResult{err: err}
+		}
+
+		doCloseFree()
+	}
+
+	Pool.Store(onResultContext, onResult)
+	Pool.Store(onFinishContext, onFinish)
+
+	if offset == 0 && cur_total_size == total_size {
+		// special case - single data chunk
+		C.session_write_data(s.session,
+			C.context_t(onResultContext), C.context_t(onFinishContext),
+			key.key, C.uint64_t(offset), (*C.char)(unsafe.Pointer(&buffer[0])), C.uint64_t(size))
+	} else if offset == 0 {
+		// first data chunk - prepare write
+		//fmt.Printf("prepare: %d : %d / %d\n", offset, size, total_size)
+		C.session_write_prepare(s.session,
+			C.context_t(onResultContext), C.context_t(onFinishContext),
+			key.key, C.uint64_t(offset), C.uint64_t(total_size),
+			(*C.char)(unsafe.Pointer(&buffer[0])), C.uint64_t(size))
+
+	} else if cur_total_size == total_size {
+		// last data chunk - commit write
+		//fmt.Printf("commit: %d : %d / %d\n", offset, size, total_size)
+		C.session_write_commit(s.session,
+			C.context_t(onResultContext), C.context_t(onFinishContext),
+			key.key, C.uint64_t(offset), C.uint64_t(total_size),
+			(*C.char)(unsafe.Pointer(&buffer[0])), C.uint64_t(size))
+	} else {
+		// intermediate data chunk - plain write
+		//fmt.Printf("plain: %d : %d / %d\n", offset, size, total_size)
+		C.session_write_plain(s.session,
+			C.context_t(onResultContext), C.context_t(onFinishContext),
+			key.key, C.uint64_t(offset),
+			(*C.char)(unsafe.Pointer(&buffer[0])), C.uint64_t(size))
+	}
+
+	// help GC
+	buffer = nil
+	lookupError = nil
+
+	return responseCh
+}
+
 // Lookup returns an information about given Key.
 // It only returns the first group where key has been found.
 func (s *Session) Lookup(key *Key) <-chan Lookuper {
