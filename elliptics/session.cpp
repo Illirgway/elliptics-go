@@ -131,6 +131,16 @@ ioflags_t session_get_ioflags(ell_session *session)
 	return session->get_ioflags();
 }
 
+void session_set_direct_addr(ell_session *session, const struct dnet_addr *addr)
+{
+	session->set_direct_id((*addr));
+}
+
+void session_set_direct_id(ell_session *session, const struct dnet_addr *addr, uint32_t backend_id)
+{
+	session->set_direct_id((*addr), backend_id);
+}
+
 const char *session_transform(ell_session *session, const char *key)
 {
 	dnet_raw_id id;

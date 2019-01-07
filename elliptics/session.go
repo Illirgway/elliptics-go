@@ -197,6 +197,24 @@ func (s *Session) SetFilter(filter int) {
 	}
 }
 
+func (s *Session) SetDirectAddr(addr *DnetAddr) {
+	var da *C.struct_dnet_addr = C.dnet_addr_alloc()
+	defer C.dnet_addr_free(da)
+
+	addr.CAddr(da)
+
+	C.session_set_direct_addr(s.session, da)
+}
+
+func (s *Session) SetDirectId(addr *DnetAddr, backend_id int32) {
+	var da *C.struct_dnet_addr = C.dnet_addr_alloc()
+	defer C.dnet_addr_free(da)
+
+	addr.CAddr(da)
+
+	C.session_set_direct_id(s.session, da, C.uint32_t(backend_id))
+}
+
 func (s *Session) Transform(key string) string {
 	ckey := C.CString(key)
 	defer C.free(unsafe.Pointer(ckey))
