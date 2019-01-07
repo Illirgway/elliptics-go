@@ -118,6 +118,9 @@ trace_id_t session_get_trace_id(ell_session *session);
 void session_set_timestamp(ell_session *session, const struct dnet_time *ts);
 void session_get_timestamp(ell_session *session, struct dnet_time *ts);
 
+void session_set_direct_addr(ell_session *session, const struct dnet_addr *addr);
+void session_set_direct_id(ell_session *session, const struct dnet_addr *addr, uint32_t backend_id);
+
 // ->lookup() returns only the first group where given key has been found
 void session_lookup(ell_session *session, context_t on_chunk_context,
 		context_t final_context, ell_key *key);
